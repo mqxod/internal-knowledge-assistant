@@ -1,0 +1,12 @@
+# Production overlay: HTTPS termination with Let's Encrypt certificates issued by certbot on the host.
+services:
+  nginx:
+    ports: !override
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
+    volumes: !override
+      - ./deploy/nginx/https.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./deploy/nginx/common.conf:/etc/nginx/snippets/common.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro

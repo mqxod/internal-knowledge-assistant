@@ -1,0 +1,19 @@
+{
+  "name": "internal-knowledge-assistant",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @ika/api --filter @ika/web dev",
+    "db:up": "docker compose --profile local up -d mongo",
+    "db:down": "docker compose --profile local stop mongo",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
+    "bootstrap:admin": "pnpm --filter @ika/api bootstrap:admin",
+    "seed:demo": "pnpm --filter @ika/api seed:demo",
+    "smoke": "./scripts/smoke.sh"
+  }
+}
