@@ -28,7 +28,7 @@ async function main() {
   const timer = setInterval(maintenance, 60_000);
   timer.unref();
 
-  const server = app.listen(config.port, () => logger.info({ port: config.port }, "API listening"));
+  const server = app.listen(config.port, () => logger.info({ port: config.port, ai: { provider: config.ai.provider, model: config.ai.model } }, "API listening"));
   server.requestTimeout = config.ai.timeoutMs + 15_000;
 
   const shutdown = (signal: string) => {

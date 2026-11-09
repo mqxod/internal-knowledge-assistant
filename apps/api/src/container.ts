@@ -2,6 +2,7 @@ import type { AppConfig } from "./config/env.js";
 import type { Logger } from "./config/logger.js";
 import type { AIProvider } from "./modules/ai/ai.types.js";
 import { AnthropicProvider } from "./modules/ai/anthropic.provider.js";
+import { OpenAIProvider } from "./modules/ai/openai.provider.js";
 import { AuditService } from "./modules/audit/audit.service.js";
 import { ClerkIdentityProvider } from "./modules/auth/clerk.identity.js";
 import type { IdentityProvider } from "./modules/auth/identity.types.js";
@@ -39,7 +40,9 @@ export function createContainer(config: AppConfig, logger: Logger, overrides: Co
       jwtKey: config.clerk.jwtKey,
       authorizedParties: config.clerk.authorizedParties,
     });
-  const ai = overrides.ai ?? new AnthropicProvider(config.ai, logger);
+  const ai =
+    overrides.ai ??
+    (config.ai.provider === "openai" ? new OpenAIProvider(config.ai, logger) : new AnthropicProvider(config.ai, logger));
   const audit = new AuditService(logger);
   const users = new UsersService(identity, audit, logger);
   const documents = new DocumentsService(config, audit, logger);

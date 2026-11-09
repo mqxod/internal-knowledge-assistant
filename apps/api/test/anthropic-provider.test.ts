@@ -4,6 +4,7 @@ import { AnthropicProvider } from "../src/modules/ai/anthropic.provider.js";
 import { AIProviderError, AITimeoutError } from "../src/utils/errors.js";
 
 const config = {
+  provider: "anthropic" as const,
   apiKey: "test-key",
   model: "claude-opus-5-5",
   effort: "low" as const,

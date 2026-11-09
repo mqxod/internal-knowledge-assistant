@@ -29,8 +29,11 @@ const envSchema = z.object({
   CLERK_AUTHORIZED_PARTIES: csv.optional(),
   REQUIRE_ADMIN_MFA: booleanString.default(false),
 
+  /** anthropic | openai. When unset, inferred from the key prefix (sk-ant- → anthropic, else openai). */
+  AI_PROVIDER: z.enum(["anthropic", "openai"]).optional(),
   AI_API_KEY: z.string().min(1, "AI_API_KEY is required"),
-  AI_MODEL: z.string().min(1).default("claude-opus-5-5"),
+  /** Defaults per provider: claude-opus-5-5 (anthropic) / gpt-5.4-mini (openai). */
+  AI_MODEL: z.string().min(1).optional(),
   AI_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max", "none"]).default("low"),
   AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(30_000),
   AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(32_000).default(4096),
@@ -53,6 +56,8 @@ const envSchema = z.object({
 
 export type Env = z.infer<typeof envSchema>;
 
+const DEFAULT_MODELS = { anthropic: "claude-opus-5-5", openai: "gpt-5.4-mini" } as const;
+
 export interface AppConfig {
   env: Env["NODE_ENV"];
   port: number;
@@ -67,6 +72,7 @@ export interface AppConfig {
     requireAdminMfa: boolean;
   };
   ai: {
+    provider: "anthropic" | "openai";
     apiKey: string;
     model: string;
     effort: "low" | "medium" | "high" | "xhigh" | "max" | undefined;
@@ -99,6 +105,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   const e = parsed.data;
   const frontendOrigin = new URL(e.FRONTEND_URL).origin;
+  const aiProvider = e.AI_PROVIDER ?? (e.AI_API_KEY.startsWith("sk-ant-") ? "anthropic" : "openai");
   return {
     env: e.NODE_ENV,
     port: e.PORT,
@@ -115,8 +122,9 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
       requireAdminMfa: e.REQUIRE_ADMIN_MFA,
     },
     ai: {
+      provider: aiProvider,
       apiKey: e.AI_API_KEY,
-      model: e.AI_MODEL,
+      model: e.AI_MODEL ?? DEFAULT_MODELS[aiProvider],
       effort: e.AI_EFFORT === "none" ? undefined : e.AI_EFFORT,
       timeoutMs: e.AI_TIMEOUT_MS,
       maxOutputTokens: e.AI_MAX_OUTPUT_TOKENS,
