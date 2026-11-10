@@ -5,6 +5,7 @@ export default defineConfig({
     server: "src/server.ts",
     "scripts/bootstrap-admin": "src/scripts/bootstrap-admin.ts",
     "scripts/seed-demo": "src/scripts/seed-demo.ts",
+    "scripts/reindex-vectors": "src/scripts/reindex-vectors.ts",
   },
   format: ["esm"],
   platform: "node",

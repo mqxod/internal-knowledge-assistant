@@ -8,7 +8,8 @@ export function authRouter(config: AppConfig): Router {
   const router = Router();
   router.get("/me", (req, res) => {
     const body: MeDTO = {
-      user: toUserDTO(req.auth!.user.toObject()),
+      user: { ...toUserDTO(req.auth!.user.toObject()), role: req.auth!.role },
+      adminEligible: req.auth!.user.role === "admin",
       config: {
         monthlyQueryLimit: config.limits.monthlyQueryLimit,
         maxQuestionLength: config.limits.maxQuestionLength,

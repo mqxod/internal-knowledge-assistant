@@ -10,6 +10,7 @@ import { ClerkIdentityProvider } from "../../src/modules/auth/clerk.identity.js"
 import type { IdentityProfile } from "../../src/modules/auth/identity.types.js";
 import { UserModel } from "../../src/modules/users/user.model.js";
 import { FakeAI } from "./fake-ai.js";
+import { FakeEmbedder, MemoryVectorStore } from "./fake-vector.js";
 import { TEST_JWT_PUBLIC_KEY, signSessionToken, type TokenOptions } from "./jwt.js";
 
 /**
@@ -35,11 +36,15 @@ export interface TestContext {
   ai: FakeAI;
   identity: TestIdentityProvider;
   clock: { now: Date };
+  vectors?: { embedder: FakeEmbedder; store: MemoryVectorStore };
 }
 
 let connected = false;
 
-export async function buildTestContext(envOverrides: Record<string, string> = {}): Promise<TestContext> {
+export async function buildTestContext(
+  envOverrides: Record<string, string> = {},
+  opts: { semantic?: boolean } = {},
+): Promise<TestContext> {
   const uri = inject("mongoUri");
   if (!connected) {
     await mongoose.connect(uri, { dbName: `ika_test_${process.pid}_${Math.random().toString(36).slice(2, 8)}` });
@@ -51,8 +56,14 @@ export async function buildTestContext(envOverrides: Record<string, string> = {}
   const ai = new FakeAI();
   const identity = new TestIdentityProvider(config.clerk.authorizedParties);
   const clock = { now: new Date() };
-  const container = createContainer(config, logger, { ai, identity, now: () => clock.now });
-  return { app: createApp(container), container, config, ai, identity, clock };
+  const vectors = opts.semantic ? { embedder: new FakeEmbedder(), store: new MemoryVectorStore() } : undefined;
+  const container = createContainer(config, logger, {
+    ai,
+    identity,
+    now: () => clock.now,
+    ...(vectors ? { embedder: vectors.embedder, vectorStore: vectors.store } : {}),
+  });
+  return { app: createApp(container), container, config, ai, identity, clock, ...(vectors ? { vectors } : {}) };
 }
 
 export async function resetDatabase(): Promise<void> {

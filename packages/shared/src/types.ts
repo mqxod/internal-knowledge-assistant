@@ -125,6 +125,9 @@ export interface PublicConfigDTO {
 }
 
 export interface MeDTO {
+  /** `user.role` is the role in effect for this session (an admin may sign in as a member). */
   user: UserDTO;
+  /** True when the account itself holds the admin role, regardless of the session's choice. */
+  adminEligible: boolean;
   config: PublicConfigDTO;
 }

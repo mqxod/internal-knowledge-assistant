@@ -1,3 +1,4 @@
+import type { UserRole } from "@ika/shared";
 import type { UserDocument } from "../modules/users/user.model.js";
 import type { VerifiedSession } from "../modules/auth/identity.types.js";
 
@@ -8,6 +9,11 @@ declare global {
       auth?: {
         user: UserDocument;
         session: VerifiedSession;
+        /**
+         * Role in effect for this request: the stored role, optionally lowered to "member" when
+         * an admin chose "Member" at sign-in. Authorization decisions must use this, not user.role.
+         */
+        role: UserRole;
       };
       requestId?: string;
     }

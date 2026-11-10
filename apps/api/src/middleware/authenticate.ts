@@ -1,6 +1,6 @@
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import type { UserRole } from "@ika/shared";
-import { ERROR_CODES } from "@ika/shared";
+import { ERROR_CODES, SIGN_IN_AS_HEADER } from "@ika/shared";
 import type { Logger } from "../config/logger.js";
 import type { IdentityProvider } from "../modules/auth/identity.types.js";
 import type { UsersService } from "../modules/users/users.service.js";
@@ -39,7 +39,9 @@ export function authenticate(
         ),
       );
     }
-    req.auth = { user, session };
+    // The client's choice can only lower privileges, never raise them.
+    const role: UserRole = user.role === "admin" && req.get(SIGN_IN_AS_HEADER) === "member" ? "member" : user.role;
+    req.auth = { user, session, role };
     next();
   };
 }
@@ -61,8 +63,8 @@ export interface RequireRoleOptions {
 export function requireRole(roles: UserRole[], options: RequireRoleOptions = {}): RequestHandler {
   return (req, _res, next) => {
     if (!req.auth) return next(new UnauthorizedError());
-    const { user, session } = req.auth;
-    if (!roles.includes(user.role)) return next(new ForbiddenError());
+    const { session, role } = req.auth;
+    if (!roles.includes(role)) return next(new ForbiddenError());
     const adminOnlyRoute = roles.length === 1 && roles[0] === "admin";
     if (options.requireAdminMfa && adminOnlyRoute && session.secondFactorVerified !== true) {
       return next(

@@ -28,6 +28,8 @@ const envSchema = z.object({
   /** Allowed `azp` origins for Clerk session tokens. Defaults to FRONTEND_URL. */
   CLERK_AUTHORIZED_PARTIES: csv.optional(),
   REQUIRE_ADMIN_MFA: booleanString.default(false),
+  /** Verified sign-ins with these emails get the admin role automatically (comma-separated). */
+  ADMIN_EMAILS: csv.optional(),
 
   /** anthropic | openai. When unset, inferred from the key prefix (sk-ant- → anthropic, else openai). */
   AI_PROVIDER: z.enum(["anthropic", "openai"]).optional(),
@@ -39,6 +41,18 @@ const envSchema = z.object({
   AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(32_000).default(4096),
   /** Organisation-wide cap on AI provider calls per UTC month (spend guardrail). */
   AI_MONTHLY_REQUEST_BUDGET: z.coerce.number().int().min(1).default(20_000),
+
+  /** Qdrant base URL (e.g. http://qdrant:6333). Unset = keyword-only search. */
+  VECTOR_DB_URL: z.url().optional().or(z.literal("").transform(() => undefined)),
+  VECTOR_DB_API_KEY: z.string().optional(),
+  VECTOR_COLLECTION: z.string().regex(/^[A-Za-z0-9_-]+$/).default("sections"),
+  /** OpenAI key for embeddings. Defaults to AI_API_KEY when the AI provider is OpenAI. */
+  EMBEDDING_API_KEY: z.string().optional(),
+  EMBEDDING_MODEL: z.string().min(1).default("text-embedding-3-small"),
+  EMBEDDING_DIMENSIONS: z.coerce.number().int().min(64).max(4096).default(1536),
+  /** Cosine similarity below which a semantic hit is ignored (guards against "close enough" guesses). */
+  VECTOR_MIN_SCORE: z.coerce.number().min(0).max(1).default(0.4),
+  VECTOR_TOP_K: z.coerce.number().int().min(1).max(50).default(12),
 
   MONTHLY_QUERY_LIMIT: z.coerce.number().int().min(1).max(100_000).default(100),
   MAX_QUESTION_LENGTH: z.coerce.number().int().min(10).max(4000).default(1000),
@@ -71,6 +85,7 @@ export interface AppConfig {
     authorizedParties: string[];
     requireAdminMfa: boolean;
   };
+  adminEmails: string[];
   ai: {
     provider: "anthropic" | "openai";
     apiKey: string;
@@ -80,6 +95,15 @@ export interface AppConfig {
     maxOutputTokens: number;
     monthlyRequestBudget: number;
   };
+  /** Null when semantic search is disabled (no vector DB URL or no embedding key). */
+  vector: {
+    url: string;
+    apiKey: string | undefined;
+    collection: string;
+    minScore: number;
+    topK: number;
+    embedding: { apiKey: string; model: string; dimensions: number; timeoutMs: number };
+  } | null;
   limits: {
     monthlyQueryLimit: number;
     maxQuestionLength: number;
@@ -121,6 +145,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
         : [frontendOrigin],
       requireAdminMfa: e.REQUIRE_ADMIN_MFA,
     },
+    adminEmails: (e.ADMIN_EMAILS ?? []).map((m) => m.toLowerCase()),
     ai: {
       provider: aiProvider,
       apiKey: e.AI_API_KEY,
@@ -130,6 +155,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
       maxOutputTokens: e.AI_MAX_OUTPUT_TOKENS,
       monthlyRequestBudget: e.AI_MONTHLY_REQUEST_BUDGET,
     },
+    vector: buildVectorConfig(e, aiProvider),
     limits: {
       monthlyQueryLimit: e.MONTHLY_QUERY_LIMIT,
       maxQuestionLength: e.MAX_QUESTION_LENGTH,
@@ -141,6 +167,24 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
       minKeywordCoverage: e.MIN_KEYWORD_COVERAGE,
       chatRateLimitPerMinute: e.CHAT_RATE_LIMIT_PER_MINUTE,
       apiRateLimitPerMinute: e.API_RATE_LIMIT_PER_MINUTE,
+    },
+  };
+}
+
+function buildVectorConfig(e: Env, aiProvider: "anthropic" | "openai"): AppConfig["vector"] {
+  const embeddingKey = e.EMBEDDING_API_KEY || (aiProvider === "openai" ? e.AI_API_KEY : undefined);
+  if (!e.VECTOR_DB_URL || !embeddingKey) return null;
+  return {
+    url: e.VECTOR_DB_URL.replace(/\/+$/, ""),
+    apiKey: e.VECTOR_DB_API_KEY || undefined,
+    collection: e.VECTOR_COLLECTION,
+    minScore: e.VECTOR_MIN_SCORE,
+    topK: e.VECTOR_TOP_K,
+    embedding: {
+      apiKey: embeddingKey,
+      model: e.EMBEDDING_MODEL,
+      dimensions: e.EMBEDDING_DIMENSIONS,
+      timeoutMs: Math.min(e.AI_TIMEOUT_MS, 15_000),
     },
   };
 }

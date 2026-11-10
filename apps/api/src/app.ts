@@ -2,7 +2,7 @@ import cors from "cors";
 import express, { Router, type Express } from "express";
 import helmet from "helmet";
 import { pinoHttp } from "pino-http";
-import { IDEMPOTENCY_HEADER } from "@ika/shared";
+import { IDEMPOTENCY_HEADER, SIGN_IN_AS_HEADER } from "@ika/shared";
 import type { Container } from "./container.js";
 import { isDatabaseConnected } from "./database/connection.js";
 import { authenticate, requireActiveUser, requireRole } from "./middleware/authenticate.js";
@@ -40,7 +40,7 @@ export function createApp(c: Container): Express {
     cors({
       origin: [config.frontendUrl],
       methods: ["GET", "POST", "PATCH", "DELETE"],
-      allowedHeaders: ["Authorization", "Content-Type", IDEMPOTENCY_HEADER, "X-Request-Id"],
+      allowedHeaders: ["Authorization", "Content-Type", IDEMPOTENCY_HEADER, SIGN_IN_AS_HEADER, "X-Request-Id"],
       credentials: false,
       maxAge: 600,
     }),

@@ -38,9 +38,9 @@ Built as a modular monolith: **Next.js (App Router) + Express + MongoDB + Clerk 
 | Area | What's implemented |
 |---|---|
 | **Auth** | Clerk sign-in; every API request verified server-side (signature, expiry, `azp`); role and status read from MongoDB, never from the client; disabled users rejected even with a live session; optional MFA enforcement for admin routes |
-| **Provisioning** | Any employee with a **verified email** signs in and is auto-created as a **member**. Admin rights are never self-granted: first admin via a server-side CLI, further admins promoted by an admin. Pre-invited records are linked by verified email |
+| **Provisioning** | Sign-in and sign-up pages offer **Member / Admin**. Any verified email gets in as a member; **Admin** is granted to emails in the server-side `ADMIN_EMAILS` allowlist (or promoted by an existing admin in People). The choice can only lower access: an admin may sign in as a member to see the member experience, a member choosing Admin sees "Not an administrator". No scripts required |
 | **Documents** | Upload `.md` / `.txt` (drag & drop); extension, MIME, size, UTF-8 and emptiness validation; content-hash duplicate detection; heading-aware chunking; real `processing → ready / failed` lifecycle with transactional persistence; access level (everyone / admin-only); rename, re-classify, delete with sections |
-| **Q&A** | Keyword retrieval with access control applied **inside the database query**; relevance threshold (no AI call when nothing matches); strict grounding prompt; JSON-schema structured output validated with Zod; citations validated against retrieved sections; explicit no-answer response |
+| **Q&A** | **Hybrid retrieval**: MongoDB keyword search + **Qdrant vector search** (OpenAI embeddings), fused by rank; access control applied **inside both queries**; relevance threshold (no AI call when nothing matches); strict grounding prompt; JSON-schema structured output validated with Zod; citations validated against retrieved sections; explicit no-answer response |
 | **Quotas** | Per-user monthly limit (default 100, UTC months) with atomic reservation, refund-once on system failure, idempotent retries, abandoned-request sweeper, org-wide AI call budget |
 | **Admin UI** | Overview metrics, recent uploads, audit activity, documents table (search, filters, pagination, actions), document detail with sections, upload flow, people management |
 | **Member UI** | Chat with suggested questions, Markdown answers (safe rendering), expandable source citations, distinct no-answer state, usage meter, limit banner with reset date, retry on failure |
@@ -59,6 +59,8 @@ flowchart LR
     W -. clerkMiddleware .-> C
     A -->|verify session JWT| C
     A -->|Mongoose| M[(MongoDB Atlas<br/>replica set)]
+    A -->|REST: vectors + filters| Q[(Qdrant<br/>vector DB)]
+    A -->|embeddings| E[OpenAI embeddings]
     A -->|messages.create<br/>structured output| L[Anthropic Claude]
 ```
 
@@ -146,13 +148,7 @@ sequenceDiagram
 - A verified identity with no record is auto-created as an active **member** (never admin). Identities without a verified email get `403 ACCOUNT_NOT_PROVISIONED`.
 - An invitation can only be claimed once, and only by a Clerk user whose **primary email is verified**.
 
-**Admin bootstrap (no HTTP endpoint):**
-
-```bash
-# after the first admin has signed up through Clerk:
-pnpm bootstrap:admin --clerk-user-id user_2abc...            # local
-docker compose exec api node dist/scripts/bootstrap-admin.js --clerk-user-id user_2abc...   # Docker
-```
+**Admins (no scripts):** set `ADMIN_EMAILS=you@company.com,other@company.com` in `.env` and restart the API. Those people choose **Admin** on the sign-in/sign-up page; on their first request with a verified email they are created as (or promoted to) admin, audited as `user.role_change` with reason `admin_allowlist`. Removing an email from the list does not demote (do that in **People**), so a typo can't lock every admin out. The `X-Sign-In-As` header sent by the web app can only lower the session's role to member, never raise it. The bootstrap CLI (`docker compose exec api node dist/scripts/bootstrap-admin.js --clerk-user-id user_...`) remains as a break-glass option.
 
 **MFA for admins:** enable authenticator-app MFA in the Clerk dashboard. Admins enroll from **Profile** (Clerk `<UserProfile/>`). Setting `REQUIRE_ADMIN_MFA=true` makes every admin-only endpoint require a session whose `fva` claim shows a verified second factor (fails closed if the claim is absent).
 
@@ -244,6 +240,16 @@ flowchart LR
 - The role used for filtering comes from the MongoDB user record. Nothing in the request can change it.
 - Restricted sections are **never loaded** for members: the `$text` query is constrained to permitted `documentId`s, and an in-pipeline `$lookup` re-checks each parent's `status`/`accessLevel` at query time, closing the race where a document is re-classified between the two steps.
 - If nothing meaningful matches, the API returns the no-answer response **without calling the AI provider**.
+
+### Semantic search (Qdrant)
+
+MongoDB stays the source of truth for documents, sections and access rules. Qdrant (`qdrant` service in Docker Compose) stores **one vector per section** (OpenAI `text-embedding-3-small`, 1536 dims, cosine) with a payload copy of the section so hits need no extra lookup.
+
+- **Ingestion:** sections are embedded and upserted **before** the document is marked `ready`. If embeddings or Qdrant are unavailable the upload still succeeds as keyword-searchable (`vectorIndexedAt = null`), and a background sweep (startup + every 10 min) backfills it. Manual: `pnpm reindex:vectors [--all]` or `docker compose exec api node dist/scripts/reindex-vectors.js`.
+- **Query:** keyword and vector retrieval run in parallel. The vector query is filtered by the **MongoDB-approved `documentId`s and the role's access levels**, every hit is re-checked against that set, and titles are taken from MongoDB — so a stale vector payload can never widen access. Hits below `VECTOR_MIN_SCORE` (0.4) are dropped. Results are merged with Reciprocal Rank Fusion, then cut to top-K within the context budget. Each source records `matchedBy: keyword | semantic`.
+- **Lifecycle:** delete removes the document's vectors; rename/re-classify updates the payload (best effort — access is always decided by MongoDB at query time).
+- **Degradation:** if Qdrant or the embedding API fails at query time, retrieval falls back to keyword-only and logs a warning. Without `VECTOR_DB_URL` or an OpenAI key the API runs keyword-only.
+- **Cost:** one embedding call per question and one batched call per upload (~$0.02 per 1M tokens) — negligible next to answer generation, and not counted against the AI request budget.
 
 ## AI grounding strategy
 
@@ -396,7 +402,8 @@ Approximate cost: t3.small ≈ US$15/month + 20 GB gp3 ≈ US$1.6 + Elastic IP (
 
 ## Known limitations
 
-- **Keyword search only** (MongoDB `$text` + re-ranking). Synonyms and paraphrases ("time off" vs "annual leave") can miss; the relevance threshold errs towards "no answer" rather than guessing.
+- **Two stores to keep in sync.** MongoDB and Qdrant are written separately (no cross-store transaction). Access is always decided by MongoDB at query time, so drift can only cost recall, never leak content; the backfill sweep repairs missing vectors.
+- **Embeddings require an OpenAI key**, even when answers use Anthropic (`EMBEDDING_API_KEY`).
 - **Single-turn Q&A.** Each question is answered independently; conversation history is kept in the browser tab only and isn't persisted.
 - **Synchronous ingestion.** Fine for ≤ 2 MB text files; large or binary formats (PDF, DOCX) would need a queue and extractors.
 - **In-memory rate limiting.** Correct for the single-instance deployment; multiple API replicas would need a shared store.
@@ -406,23 +413,23 @@ Approximate cost: t3.small ≈ US$15/month + 20 GB gp3 ≈ US$1.6 + Elastic IP (
 
 ## Intentionally left out
 
-- Embeddings / vector search, Redis, queues, Kubernetes, microservices — not needed at this scale and the brief asked for keyword search first.
+- Redis, queues, Kubernetes, microservices — not needed at this scale and the brief asked for keyword search first.
 - Streaming responses — answers are short; the UI shows an honest "searching…" state instead of fake streaming.
 - Document versioning and editing content in place (re-upload instead).
 - PDF/DOCX ingestion, SSO/SCIM provisioning, per-department access groups.
 
 ## One known problem and how to fix it
 
-**Problem:** keyword retrieval is vocabulary-sensitive. "How much holiday do I get?" finds nothing in a policy that only says "annual leave", so the user gets a no-answer even though the information exists.
+**Problem:** the semantic similarity floor (`VECTOR_MIN_SCORE=0.4`) is a single global guess, not a calibrated value. Too low, and loosely related sections reach the model (more tokens, and the model has to decline); too high, and genuine paraphrases are missed and the user gets a no-answer.
 
-**Fix (incremental, no new infrastructure):**
-1. Add embeddings per section at ingestion (e.g. a small embedding model) stored on the section document, and use **MongoDB Atlas Vector Search** (`$vectorSearch`) with the same `documentId ∈ allowed` pre-filter so access control stays in the query.
-2. Combine vector and keyword results with reciprocal-rank fusion, keep the current coverage threshold for the keyword half, and keep citation validation unchanged.
-3. Cheaper interim step: a maintained synonym map (holiday↔leave, PTO↔annual leave) applied during keyword extraction.
+**Fix:**
+1. Build a small evaluation set (~50 real employee questions with the expected section for each, plus questions that should get no answer).
+2. Run it through keyword-only, semantic-only and hybrid retrieval, recording recall@K and the no-answer precision for each threshold.
+3. Pick the threshold from the data, keep the eval in CI so model or chunking changes can't silently regress retrieval.
 
 ## Future improvements
 
-- Hybrid retrieval (above) and an evaluation set of real questions with expected sources to measure answer quality.
+- A retrieval evaluation set (above) comparing keyword vs semantic vs hybrid on the same questions.
 - Persist conversations with per-user retention settings; allow follow-up questions with condensed history.
 - Background ingestion queue with progress for large files; PDF/DOCX extraction.
 - SSO (SAML/OIDC) and SCIM provisioning via Clerk; department-level access groups.

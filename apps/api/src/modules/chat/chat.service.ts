@@ -7,6 +7,7 @@ import { sha256 } from "../../utils/text.js";
 import type { AIProvider } from "../ai/ai.types.js";
 import type { SearchService } from "../search/search.service.js";
 import type { UsageService } from "../usage/usage.service.js";
+import type { UserRole } from "@ika/shared";
 import type { UserDocument } from "../users/user.model.js";
 import { noAnswer, validateCitations, type ValidatedAnswer } from "./citations.js";
 
@@ -26,7 +27,7 @@ export class ChatService {
     private readonly logger: Logger,
   ) {}
 
-  async ask(user: UserDocument, question: string, idempotencyKey: string | undefined): Promise<ChatAnswerDTO> {
+  async ask(user: UserDocument, role: UserRole, question: string, idempotencyKey: string | undefined): Promise<ChatAnswerDTO> {
     if (question.length > this.config.limits.maxQuestionLength) {
       throw new ValidationError(`Questions must be ${this.config.limits.maxQuestionLength} characters or fewer.`);
     }
@@ -43,7 +44,7 @@ export class ChatService {
     // replayed with the same idempotency key, so a retry neither re-bills nor re-calls the AI.
     let result: ValidatedAnswer;
     try {
-      result = await this.answer(user, question);
+      result = await this.answer(user, role, question);
     } catch (err) {
       const refunded = await this.usage.release(reservation.reservationId, (err as Error).name).catch((releaseErr) => {
         this.logger.error({ err: releaseErr }, "Failed to release usage reservation");
@@ -63,8 +64,8 @@ export class ChatService {
     return { ...payload, usage: await this.usage.getSummary(user._id) };
   }
 
-  private async answer(user: UserDocument, question: string): Promise<ValidatedAnswer> {
-    const sections = await this.search.search(question, user.role);
+  private async answer(user: UserDocument, role: UserRole, question: string): Promise<ValidatedAnswer> {
+    const sections = await this.search.search(question, role);
     // Log shape, never content.
     this.logger.info({ userId: user._id.toString(), retrieved: sections.length }, "Retrieval complete");
     if (sections.length === 0) return noAnswer();

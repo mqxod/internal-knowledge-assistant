@@ -1,4 +1,5 @@
-import type { ApiResponse, ErrorCode, UsageSummary } from "@ika/shared";
+import { SIGN_IN_AS_HEADER, type ApiResponse, type ErrorCode, type UsageSummary } from "@ika/shared";
+import { getSignInAs } from "./sign-in-as";
 
 export type ClientErrorCode = ErrorCode | "NETWORK_ERROR" | "UNKNOWN_ERROR";
 
@@ -38,6 +39,7 @@ export function createApiClient(getToken: TokenGetter): ApiClient {
     const token = await getToken();
     const headers: Record<string, string> = { Accept: "application/json", ...options.headers };
     if (token) headers.Authorization = `Bearer ${token}`;
+    headers[SIGN_IN_AS_HEADER] = getSignInAs();
 
     let body: BodyInit | undefined;
     if (options.body instanceof FormData) body = options.body;

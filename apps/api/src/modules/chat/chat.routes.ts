@@ -15,7 +15,7 @@ export function chatRouter(chat: ChatService, perUserLimiter: RequestHandler): R
       if (!parsed.success) throw new ValidationError(`The ${IDEMPOTENCY_HEADER} header is invalid.`);
       key = parsed.data;
     }
-    const result = await chat.ask(req.auth!.user, req.body.question, key);
+    const result = await chat.ask(req.auth!.user, req.auth!.role, req.body.question, key);
     sendSuccess(res, result, result.found ? "Answer generated" : "No supported answer found");
   });
   return router;

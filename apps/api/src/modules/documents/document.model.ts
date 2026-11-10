@@ -16,6 +16,8 @@ const documentSchema = new Schema(
     errorCode: { type: String, default: null },
     processingStartedAt: { type: Date, default: null },
     processedAt: { type: Date, default: null },
+    /** Set once the sections are embedded in the vector DB; null = keyword-only until backfilled. */
+    vectorIndexedAt: { type: Date, default: null },
   },
   { timestamps: true, collection: "documents" },
 );

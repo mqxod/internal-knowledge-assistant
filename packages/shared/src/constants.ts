@@ -17,6 +17,11 @@ export const ALLOWED_UPLOAD_EXTENSIONS = [".md", ".markdown", ".txt"] as const;
 
 /** Header used by the chat endpoint to make retries idempotent. */
 export const IDEMPOTENCY_HEADER = "Idempotency-Key";
+/**
+ * Role the user chose on the sign-in page. Can only *lower* access: an admin sending "member"
+ * uses the app as a member; a member sending "admin" is ignored by the server.
+ */
+export const SIGN_IN_AS_HEADER = "X-Sign-In-As";
 
 export const NO_ANSWER_MESSAGE =
   "I couldn't find enough information in the company's available documents to answer this question. Please contact your administrator for clarification.";

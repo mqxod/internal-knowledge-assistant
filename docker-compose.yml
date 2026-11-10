@@ -15,6 +15,9 @@ services:
       PORT: "4000"
       TRUST_PROXY: "1"
       MONGODB_URI: ${MONGODB_URI:-mongodb://mongo:27017/knowledge_assistant?replicaSet=rs0}
+      VECTOR_DB_URL: ${VECTOR_DB_URL:-http://qdrant:6333}
+    depends_on:
+      qdrant: { condition: service_healthy }
     restart: unless-stopped
     expose: ["4000"]
     read_only: true
@@ -56,6 +59,27 @@ services:
       api: { condition: service_healthy }
     logging: *logging
 
+  # Vector DB: one embedding per document section, used for semantic search alongside keywords.
+  qdrant:
+    image: qdrant/qdrant:v1.20.0
+    restart: unless-stopped
+    environment:
+      QDRANT__TELEMETRY_DISABLED: "true"
+      # Optional: require an API key (set the same value as VECTOR_DB_API_KEY for the API).
+      QDRANT__SERVICE__API_KEY: ${VECTOR_DB_API_KEY:-}
+    expose: ["6333"]
+    # Localhost-only, for the dashboard at http://localhost:6333/dashboard. Never public.
+    ports: ["127.0.0.1:${QDRANT_PORT:-6333}:6333"]
+    volumes: [qdrant-data:/qdrant/storage]
+    healthcheck:
+      test: ["CMD", "bash", "-c", ":> /dev/tcp/127.0.0.1/6333"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
   # Local development only. Production uses MongoDB Atlas (transactions need a replica set).
   mongo:
     image: mongo:8
@@ -73,3 +97,4 @@ services:
 
 volumes:
   mongo-data:
+  qdrant-data:

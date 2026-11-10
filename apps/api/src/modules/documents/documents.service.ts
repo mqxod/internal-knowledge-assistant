@@ -20,6 +20,7 @@ import type { UserDocument } from "../users/user.model.js";
 import { TooManySectionsError, parseDocument } from "./chunker.js";
 import { DocumentModel } from "./document.model.js";
 import { toDocumentDTO, toSectionDTO } from "./documents.mapper.js";
+import type { SemanticIndex } from "../vector/semantic-index.service.js";
 import { SectionModel } from "./section.model.js";
 import { validateUpload } from "./upload.validation.js";
 
@@ -30,6 +31,7 @@ export class DocumentsService {
     private readonly config: AppConfig,
     private readonly audit: AuditService,
     private readonly logger: Logger,
+    private readonly semantic: SemanticIndex | null = null,
   ) {}
 
   /**
@@ -84,39 +86,60 @@ export class DocumentsService {
         throw new AppError(422, ERROR_CODES.EMPTY_DOCUMENT, "No indexable sections were found in the document.");
       }
       const title = fields.title ?? parsed.detectedTitle ?? doc.title;
+      const sections = parsed.sections.map((s, i) => ({
+        _id: new Types.ObjectId(),
+        documentId: doc._id,
+        documentTitle: title,
+        sectionTitle: s.sectionTitle,
+        parentHeading: s.parentHeading,
+        headingPath: s.headingPath,
+        content: s.content,
+        sectionIndex: i,
+        charCount: s.content.length,
+      }));
 
-      await withTransaction(async (session) => {
-        await SectionModel.insertMany(
-          parsed.sections.map((s, i) => ({
-            documentId: doc._id,
-            documentTitle: title,
-            sectionTitle: s.sectionTitle,
-            parentHeading: s.parentHeading,
-            headingPath: s.headingPath,
-            content: s.content,
-            sectionIndex: i,
-            charCount: s.content.length,
-          })),
-          { session },
-        );
-        const updated = await DocumentModel.updateOne(
-          { _id: doc._id, status: "processing" },
-          { $set: { status: "ready", title, sectionCount: parsed.sections.length, processedAt: new Date(), errorCode: null } },
-          { session },
-        );
-        if (updated.modifiedCount !== 1) throw new Error("Document left processing state during ingestion");
-        await this.audit.record(
-          {
-            actorId: actor._id,
-            action: "document.upload",
-            resourceType: "document",
-            resourceId: doc._id,
-            metadata: { title, accessLevel: fields.accessLevel, sections: parsed.sections.length },
-          },
-          session,
-        );
-      });
-      this.logger.info({ documentId: doc._id.toString(), sections: parsed.sections.length }, "Document ingested");
+      // Vectors are written before the document becomes `ready`, so "ready" means fully searchable.
+      // An embedding/vector-DB outage doesn't fail the upload: keyword search still works and
+      // the background backfill indexes the document once the service is back.
+      const vectorIndexed = await this.indexVectors(sections, fields.accessLevel);
+
+      try {
+        await withTransaction(async (session) => {
+          await SectionModel.insertMany(sections, { session });
+          const updated = await DocumentModel.updateOne(
+            { _id: doc._id, status: "processing" },
+            {
+              $set: {
+                status: "ready",
+                title,
+                sectionCount: parsed.sections.length,
+                processedAt: new Date(),
+                errorCode: null,
+                vectorIndexedAt: vectorIndexed ? new Date() : null,
+              },
+            },
+            { session },
+          );
+          if (updated.modifiedCount !== 1) throw new Error("Document left processing state during ingestion");
+          await this.audit.record(
+            {
+              actorId: actor._id,
+              action: "document.upload",
+              resourceType: "document",
+              resourceId: doc._id,
+              metadata: { title, accessLevel: fields.accessLevel, sections: parsed.sections.length },
+            },
+            session,
+          );
+        });
+      } catch (err) {
+        if (vectorIndexed) await this.semantic?.removeDocument(doc._id);
+        throw err;
+      }
+      this.logger.info(
+        { documentId: doc._id.toString(), sections: parsed.sections.length, vectorIndexed },
+        "Document ingested",
+      );
       return this.getSummary(doc._id);
     } catch (err) {
       const { code, message, status } = describeIngestionFailure(err, this.config.limits.maxSectionsPerDocument);
@@ -129,12 +152,32 @@ export class DocumentsService {
     }
   }
 
+  /** Returns true when the sections are in the vector DB; never throws. */
+  private async indexVectors(
+    sections: Parameters<SemanticIndex["indexSections"]>[0],
+    accessLevel: UploadDocumentFields["accessLevel"],
+  ): Promise<boolean> {
+    if (!this.semantic) return false;
+    try {
+      await this.semantic.indexSections(sections, accessLevel);
+      return true;
+    } catch (err) {
+      this.logger.warn(
+        { documentId: sections[0]?.documentId.toString(), error: (err as Error).name, status: (err as { status?: number }).status },
+        "Vector indexing failed; document stays keyword-searchable until backfilled",
+      );
+      return false;
+    }
+  }
+
   private async markFailed(id: Types.ObjectId, errorCode: string): Promise<void> {
+    await this.semantic?.removeDocument(id);
     await SectionModel.deleteMany({ documentId: id });
     await DocumentModel.updateOne({ _id: id }, { $set: { status: "failed", errorCode, sectionCount: 0, processedAt: new Date() } });
   }
 
   private async removeDocumentAndSections(id: Types.ObjectId): Promise<void> {
+    await this.semantic?.removeDocument(id);
     await withTransaction(async (session) => {
       await SectionModel.deleteMany({ documentId: id }, { session });
       await DocumentModel.deleteOne({ _id: id }, { session });
@@ -206,6 +249,7 @@ export class DocumentsService {
   }
 
   async update(id: string, input: UpdateDocumentInput, actor: UserDocument): Promise<DocumentDTO> {
+    const applied: { documentTitle?: string; accessLevel?: UpdateDocumentInput["accessLevel"] & string } = {};
     await withTransaction(async (session) => {
       const doc = await DocumentModel.findById(id).session(session);
       if (!doc) throw new NotFoundError(ERROR_CODES.DOCUMENT_NOT_FOUND, "Document not found.");
@@ -223,12 +267,16 @@ export class DocumentsService {
         doc.accessLevel = input.accessLevel;
       }
       if (Object.keys(changes).length === 0) return;
+      if (changes.title) applied.documentTitle = changes.title;
+      if (changes.accessLevel) applied.accessLevel = doc.accessLevel;
       await doc.save({ session });
       await this.audit.record(
         { actorId: actor._id, action: "document.update", resourceType: "document", resourceId: doc._id, metadata: changes },
         session,
       );
     });
+    // Access is enforced from MongoDB at query time; this just keeps the vector payload tidy.
+    if (Object.keys(applied).length) await this.semantic?.updateDocument(id, applied);
     return this.getSummary(id);
   }
 
@@ -246,6 +294,7 @@ export class DocumentsService {
         session,
       );
     });
+    await this.semantic?.removeDocument(id);
   }
 }
 

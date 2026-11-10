@@ -1,7 +1,7 @@
 "use client";
 
 import { RedirectToSignIn, useClerk } from "@clerk/nextjs";
-import { Loader2, LogOut, Menu, ShieldOff, UserX } from "lucide-react";
+import { Loader2, LogOut, Menu, ShieldAlert, ShieldOff, UserRound, UserX } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useState, type ReactNode } from "react";
 import { ErrorState } from "@/components/common/states";
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { useMe } from "@/features/auth/hooks/use-me";
 import { ApiError } from "@/lib/api-client";
+import { useSignInAs, useSwitchSignInAs } from "@/features/auth/hooks/use-sign-in-as";
 import { Brand, SidebarContent } from "./app-sidebar";
 import { ThemeToggle } from "./theme-toggle";
 
@@ -16,7 +17,17 @@ function FullScreen({ children }: { children: ReactNode }) {
   return <div className="flex min-h-screen items-center justify-center p-6">{children}</div>;
 }
 
-function AccountBlocked({ icon: Icon, title, message }: { icon: typeof UserX; title: string; message: string }) {
+function AccountBlocked({
+  icon: Icon,
+  title,
+  message,
+  action,
+}: {
+  icon: typeof UserX;
+  title: string;
+  message: string;
+  action?: ReactNode;
+}) {
   const { signOut } = useClerk();
   return (
     <FullScreen>
@@ -26,7 +37,8 @@ function AccountBlocked({ icon: Icon, title, message }: { icon: typeof UserX; ti
         </div>
         <h1 className="font-semibold">{title}</h1>
         <p className="mt-2 text-sm text-muted-foreground">{message}</p>
-        <Button variant="outline" className="mt-6 w-full" onClick={() => void signOut({ redirectUrl: "/sign-in" })}>
+        {action}
+        <Button variant="outline" className={action ? "mt-2 w-full" : "mt-6 w-full"} onClick={() => void signOut({ redirectUrl: "/sign-in" })}>
           <LogOut /> Sign out
         </Button>
       </div>
@@ -36,6 +48,8 @@ function AccountBlocked({ icon: Icon, title, message }: { icon: typeof UserX; ti
 
 export function AppShell({ children }: { children: ReactNode }) {
   const me = useMe();
+  const signInAs = useSignInAs();
+  const switchSignInAs = useSwitchSignInAs();
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -66,7 +80,22 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   if (!me.data) return null;
-  const { user } = me.data;
+  const { user, adminEligible } = me.data;
+
+  if (signInAs === "admin" && !adminEligible) {
+    return (
+      <AccountBlocked
+        icon={ShieldAlert}
+        title="Not an administrator"
+        message={`${user.email} doesn't have admin access. Ask an existing administrator to grant it, or continue as a member.`}
+        action={
+          <Button className="mt-6 w-full" onClick={() => switchSignInAs("member")}>
+            <UserRound /> Continue as member
+          </Button>
+        }
+      />
+    );
+  }
   const forbidden = pathname.startsWith("/admin") && user.role !== "admin";
 
   return (

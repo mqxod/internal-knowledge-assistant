@@ -17,21 +17,55 @@ import { UserModel, type UserDocument } from "./user.model.js";
 import { toUserDTO } from "./users.mapper.js";
 
 export class UsersService {
+  private readonly adminEmails: Set<string>;
+
   constructor(
     private readonly identity: IdentityProvider,
     private readonly audit: AuditService,
     private readonly logger: Logger,
-  ) {}
+    adminEmails: string[] = [],
+  ) {
+    this.adminEmails = new Set(adminEmails.map((e) => e.trim().toLowerCase()).filter(Boolean));
+  }
+
+  private isAllowlistedAdmin(email: string): boolean {
+    return this.adminEmails.has(email.toLowerCase());
+  }
+
+  /**
+   * ADMIN_EMAILS grants admin on sign-in. Only applies to active accounts whose email was
+   * verified when the Clerk identity was linked. Removing an email from the list does not demote
+   * (an admin can do that in People), so a config typo can't lock every admin out.
+   */
+  private async applyAdminAllowlist(user: UserDocument): Promise<UserDocument> {
+    if (user.role === "admin" || user.status !== "active" || !this.isAllowlistedAdmin(user.email)) return user;
+    const promoted = await UserModel.findOneAndUpdate(
+      { _id: user._id, role: "member", status: "active" },
+      { $set: { role: "admin" } },
+      { returnDocument: "after" },
+    );
+    if (!promoted) return (await UserModel.findById(user._id)) ?? user;
+    await this.audit.record({
+      actorId: null,
+      action: "user.role_change",
+      resourceType: "user",
+      resourceId: promoted._id,
+      metadata: { from: "member", to: "admin", reason: "admin_allowlist" },
+    });
+    this.logger.info({ userId: promoted._id.toString() }, "Promoted to admin via ADMIN_EMAILS");
+    return promoted;
+  }
 
   /**
    * Resolves the application user for a verified Clerk identity.
    * First sign-in links a pre-provisioned (invited) record by *verified* email; otherwise
-   * a verified identity is self-provisioned as an active **member**. Admin rights are only
-   * ever granted by an existing admin or the bootstrap CLI, never by signing in.
+   * a verified identity is self-provisioned as an active member. Admin rights come only from
+   * the server-side ADMIN_EMAILS allowlist, an existing admin, or the bootstrap CLI — never
+   * from anything the client sends.
    */
   async resolveSignedInUser(clerkUserId: string): Promise<UserDocument | null> {
     const existing = await UserModel.findOne({ clerkUserId });
-    if (existing) return existing;
+    if (existing) return this.applyAdminAllowlist(existing);
 
     const profile = await this.identity.getProfile(clerkUserId);
     if (!profile.email || !profile.emailVerified) return null;
@@ -49,7 +83,7 @@ export class UsersService {
         resourceId: linked._id,
       });
       this.logger.info({ userId: linked._id.toString() }, "Linked Clerk identity to provisioned user");
-      return linked;
+      return this.applyAdminAllowlist(linked);
     }
 
     // Email already belongs to a different Clerk identity: never let a second account claim it.
@@ -60,7 +94,7 @@ export class UsersService {
         clerkUserId,
         email: profile.email,
         name: profile.name,
-        role: "member",
+        role: this.isAllowlistedAdmin(profile.email) ? "admin" : "member",
         status: "active",
       });
       await this.audit.record({
@@ -68,8 +102,9 @@ export class UsersService {
         action: "user.self_provisioned",
         resourceType: "user",
         resourceId: created._id,
+        metadata: { role: created.role },
       });
-      this.logger.info({ userId: created._id.toString() }, "Self-provisioned member on first sign-in");
+      this.logger.info({ userId: created._id.toString(), role: created.role }, "Self-provisioned user on first sign-in");
       return created;
     } catch (err) {
       // Concurrent first requests from the same user: the other request won the insert.

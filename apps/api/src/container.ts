@@ -11,6 +11,10 @@ import { DocumentsService } from "./modules/documents/documents.service.js";
 import { SearchService } from "./modules/search/search.service.js";
 import { UsageService } from "./modules/usage/usage.service.js";
 import { UsersService } from "./modules/users/users.service.js";
+import { OpenAIEmbedder } from "./modules/vector/openai.embedder.js";
+import { QdrantStore } from "./modules/vector/qdrant.store.js";
+import { SemanticIndex } from "./modules/vector/semantic-index.service.js";
+import type { Embedder, VectorStore } from "./modules/vector/vector.types.js";
 
 export interface Container {
   config: AppConfig;
@@ -21,6 +25,8 @@ export interface Container {
   users: UsersService;
   documents: DocumentsService;
   search: SearchService;
+  /** Null when semantic search is disabled (keyword-only). */
+  semantic: SemanticIndex | null;
   usage: UsageService;
   chat: ChatService;
 }
@@ -28,6 +34,9 @@ export interface Container {
 export interface ContainerOverrides {
   identity?: IdentityProvider;
   ai?: AIProvider;
+  /** Supplying both enables semantic search even without VECTOR_DB_URL (tests). */
+  embedder?: Embedder;
+  vectorStore?: VectorStore;
   now?: () => Date;
 }
 
@@ -44,9 +53,10 @@ export function createContainer(config: AppConfig, logger: Logger, overrides: Co
     overrides.ai ??
     (config.ai.provider === "openai" ? new OpenAIProvider(config.ai, logger) : new AnthropicProvider(config.ai, logger));
   const audit = new AuditService(logger);
-  const users = new UsersService(identity, audit, logger);
-  const documents = new DocumentsService(config, audit, logger);
-  const search = new SearchService(config);
+  const users = new UsersService(identity, audit, logger, config.adminEmails);
+  const semantic = createSemanticIndex(config, logger, overrides);
+  const documents = new DocumentsService(config, audit, logger, semantic);
+  const search = new SearchService(config, semantic, logger);
   const usage = new UsageService(
     {
       monthlyLimit: config.limits.monthlyQueryLimit,
@@ -58,5 +68,19 @@ export function createContainer(config: AppConfig, logger: Logger, overrides: Co
     overrides.now,
   );
   const chat = new ChatService(config, search, ai, usage, logger);
-  return { config, logger, identity, ai, audit, users, documents, search, usage, chat };
+  return { config, logger, identity, ai, audit, users, documents, search, semantic, usage, chat };
+}
+
+function createSemanticIndex(config: AppConfig, logger: Logger, overrides: ContainerOverrides): SemanticIndex | null {
+  const options = { topK: config.vector?.topK ?? 12, minScore: config.vector?.minScore ?? 0.4 };
+  if (overrides.embedder && overrides.vectorStore) {
+    return new SemanticIndex(overrides.embedder, overrides.vectorStore, options, logger);
+  }
+  if (!config.vector) return null;
+  return new SemanticIndex(
+    new OpenAIEmbedder(config.vector.embedding),
+    new QdrantStore({ url: config.vector.url, apiKey: config.vector.apiKey, collection: config.vector.collection }),
+    options,
+    logger,
+  );
 }

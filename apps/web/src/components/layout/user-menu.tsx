@@ -1,7 +1,7 @@
 "use client";
 
 import { useClerk } from "@clerk/nextjs";
-import { LogOut, UserRound } from "lucide-react";
+import { LogOut, Repeat, UserRound } from "lucide-react";
 import Link from "next/link";
 import type { UserDTO } from "@ika/shared";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -13,10 +13,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useMe } from "@/features/auth/hooks/use-me";
 import { initials } from "@/lib/format";
+import { useSwitchSignInAs } from "@/features/auth/hooks/use-sign-in-as";
 
 export function UserMenu({ user }: { user: UserDTO }) {
   const { signOut } = useClerk();
+  const adminEligible = useMe().data?.adminEligible ?? false;
+  const switchSignInAs = useSwitchSignInAs();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger className="flex min-w-0 items-center gap-2 rounded-md p-1 text-left outline-none hover:bg-accent focus-visible:ring-3 focus-visible:ring-ring/50">
@@ -36,6 +40,11 @@ export function UserMenu({ user }: { user: UserDTO }) {
             <UserRound /> Profile & security
           </Link>
         </DropdownMenuItem>
+        {adminEligible && (
+          <DropdownMenuItem onSelect={() => switchSignInAs(user.role === "admin" ? "member" : "admin")}>
+            <Repeat /> {user.role === "admin" ? "Switch to member view" : "Switch to admin view"}
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onSelect={() => void signOut({ redirectUrl: "/sign-in" })}>
           <LogOut /> Sign out
         </DropdownMenuItem>

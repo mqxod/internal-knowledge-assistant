@@ -28,12 +28,28 @@ async function main() {
   const timer = setInterval(maintenance, 60_000);
   timer.unref();
 
-  const server = app.listen(config.port, () => logger.info({ port: config.port, ai: { provider: config.ai.provider, model: config.ai.model } }, "API listening"));
+  // Embed documents that aren't in the vector DB yet (first start, or after an outage).
+  // Runs in the background so a slow/unavailable embedding provider never blocks startup.
+  const backfill = () =>
+    container.semantic?.backfill({ limit: 50 }).catch((err) => logger.warn({ err: (err as Error).name }, "Vector backfill sweep failed"));
+  void backfill();
+  const backfillTimer = setInterval(backfill, 10 * 60_000);
+  backfillTimer.unref();
+
+  const server = app.listen(config.port, () => logger.info(
+      {
+        port: config.port,
+        ai: { provider: config.ai.provider, model: config.ai.model },
+        search: config.vector ? { mode: "hybrid", collection: config.vector.collection, embedding: config.vector.embedding.model } : { mode: "keyword" },
+      },
+      "API listening",
+    ));
   server.requestTimeout = config.ai.timeoutMs + 15_000;
 
   const shutdown = (signal: string) => {
     logger.info({ signal }, "Shutting down");
     clearInterval(timer);
+    clearInterval(backfillTimer);
     server.close(async () => {
       await disconnectDatabase();
       process.exit(0);
