@@ -6,6 +6,7 @@ import { AIProviderError, AITimeoutError } from "../src/utils/errors.js";
 const config = {
   provider: "openai" as const,
   apiKey: "test-key",
+  baseUrl: undefined,
   model: "gpt-5.4-mini",
   effort: "low" as const,
   timeoutMs: 1500,
@@ -59,7 +60,7 @@ describe("OpenAIProvider", () => {
     expect(req.model).toBe("gpt-5.4-mini");
     expect(req.max_completion_tokens).toBe(1024);
     expect(req.reasoning_effort).toBe("low");
-    expect(req.messages[0]!.role).toBe("developer");
+    expect(req.messages[0]!.role).toBe("system");
     expect(req.messages[0]!.content).toContain("using only the supplied company document context");
     expect(req.response_format).toMatchObject({ type: "json_schema", json_schema: { strict: true } });
   });

@@ -15,9 +15,16 @@ services:
       PORT: "4000"
       TRUST_PROXY: "1"
       MONGODB_URI: ${MONGODB_URI:-mongodb://mongo:27017/knowledge_assistant?replicaSet=rs0}
-      VECTOR_DB_URL: ${VECTOR_DB_URL:-http://qdrant:6333}
+      # Empty = keyword-only search. To enable semantic search: start with `--profile vector`,
+      # set VECTOR_DB_URL=http://qdrant:6333 and an embeddings key (EMBEDDING_API_KEY).
+      VECTOR_DB_URL: ${VECTOR_DB_URL:-}
+      # Overridable from the shell (scripts/demo.sh adds the public tunnel URL); otherwise from .env.
+      CLERK_AUTHORIZED_PARTIES: ${CLERK_AUTHORIZED_PARTIES:-http://localhost:8080,http://localhost:3000}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8080}
     depends_on:
-      qdrant: { condition: service_healthy }
+      # Local MongoDB is the default. When MONGODB_URI points at Atlas, the mongo container
+      # still starts but is unused; production disables it in docker-compose.prod.yml.
+      mongo: { condition: service_healthy, required: false }
     restart: unless-stopped
     expose: ["4000"]
     read_only: true
@@ -59,9 +66,10 @@ services:
       api: { condition: service_healthy }
     logging: *logging
 
-  # Vector DB: one embedding per document section, used for semantic search alongside keywords.
+  # Optional vector DB (`--profile vector`): one embedding per section for semantic search.
   qdrant:
     image: qdrant/qdrant:v1.20.0
+    profiles: [vector]
     restart: unless-stopped
     environment:
       QDRANT__TELEMETRY_DISABLED: "true"
@@ -80,10 +88,23 @@ services:
     security_opt: ["no-new-privileges:true"]
     logging: *logging
 
-  # Local development only. Production uses MongoDB Atlas (transactions need a replica set).
+  # Optional public URL for demos (`--profile public`): a Cloudflare quick tunnel to Nginx.
+  # No account needed; the https://<random>.trycloudflare.com URL is printed in this service's logs.
+  # scripts/demo.sh starts it and wires the URL into Clerk's allowed origins.
+  tunnel:
+    image: cloudflare/cloudflared:2026.10.0
+    profiles: [public]
+    command: ["tunnel", "--no-autoupdate", "--url", "http://nginx:80"]
+    restart: unless-stopped
+    depends_on:
+      nginx: { condition: service_started }
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
+  # Default local database (a single-node replica set: transactions need one).
+  # Production uses MongoDB Atlas instead (see docker-compose.prod.yml).
   mongo:
     image: mongo:8
-    profiles: [local]
     command: ["--replSet", "rs0", "--bind_ip_all"]
     ports: ["127.0.0.1:27017:27017"]
     volumes: [mongo-data:/data/db]

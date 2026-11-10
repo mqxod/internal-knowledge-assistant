@@ -10,3 +10,6 @@ services:
       - ./deploy/nginx/https.conf.template:/etc/nginx/templates/default.conf.template:ro
       - ./deploy/nginx/common.conf:/etc/nginx/snippets/common.conf:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
+  # Production uses MongoDB Atlas (MONGODB_URI in .env); don't run the local database.
+  mongo:
+    profiles: [local]

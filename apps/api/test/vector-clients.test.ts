@@ -76,7 +76,7 @@ describe("QdrantStore", () => {
 });
 
 describe("OpenAIEmbedder", () => {
-  const config = { apiKey: "k", model: "text-embedding-3-small", dimensions: 3, timeoutMs: 2000 };
+  const config = { apiKey: "k", baseUrl: undefined, model: "text-embedding-3-small", dimensions: 3, timeoutMs: 2000 };
 
   it("requests the configured model/dimensions and returns vectors in input order", async () => {
     const { f, calls } = recorder(() =>

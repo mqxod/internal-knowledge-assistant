@@ -6,6 +6,7 @@ import { AIProviderError, AITimeoutError } from "../src/utils/errors.js";
 const config = {
   provider: "anthropic" as const,
   apiKey: "test-key",
+  baseUrl: undefined,
   model: "claude-opus-5-5",
   effort: "low" as const,
   timeoutMs: 1500,

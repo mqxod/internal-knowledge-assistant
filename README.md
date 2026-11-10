@@ -362,6 +362,16 @@ The tests exercise real behaviour, not just status codes:
 - **Quotas:** limit enforced with `429` + usage + reset date; **12 concurrent requests vs. limit 3 → exactly 3 succeed**; failures refunded; no-answers counted; UTC month rollover; idempotent replay without double counting; per-user key scoping; key reuse for another question rejected; in-flight duplicate → `409`; triple concurrent release refunds once; abandoned reservations swept; org AI budget stops provider calls.
 - **Anthropic provider:** the real SDK request/parse path with a stubbed `fetch` — request shape (model, schema, effort), schema-invalid/empty/truncated output, refusal, 429/500/529/401 mapping without leaking provider text, network errors, and the hard timeout.
 
+## Share a running demo from your machine
+
+```bash
+scripts/demo.sh --build   # first run / after code changes
+scripts/demo.sh           # later restarts
+scripts/demo.sh stop
+```
+
+Starts the full stack with the local MongoDB container plus a **Cloudflare quick tunnel** (no account), adds the printed `https://<random>.trycloudflare.com` URL to Clerk's allowed origins, and keeps the Mac awake (`caffeinate`) until stopped. The URL changes whenever the tunnel restarts — rerun the script to get the new one. Requests through the tunnel share one client IP, so the Nginx/API per-IP rate limits apply to all visitors together.
+
 ## Vercel deployment (Services)
 
 `vercel.json` deploys both apps as **one Vercel project with two services** on one domain:

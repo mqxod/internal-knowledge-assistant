@@ -51,7 +51,7 @@ export function createContainer(config: AppConfig, logger: Logger, overrides: Co
     });
   const ai =
     overrides.ai ??
-    (config.ai.provider === "openai" ? new OpenAIProvider(config.ai, logger) : new AnthropicProvider(config.ai, logger));
+    (config.ai.provider === "anthropic" ? new AnthropicProvider(config.ai, logger) : new OpenAIProvider(config.ai, logger));
   const audit = new AuditService(logger);
   const users = new UsersService(identity, audit, logger, config.adminEmails);
   const semantic = createSemanticIndex(config, logger, overrides);

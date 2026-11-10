@@ -26,8 +26,9 @@ const ANSWER_JSON_SCHEMA = {
   },
 } as const;
 
+/** OpenAI and OpenAI-compatible APIs (Groq) via `config.baseUrl`. */
 export class OpenAIProvider implements AIProvider {
-  readonly name = "openai";
+  readonly name: string;
   private readonly client: OpenAI;
 
   constructor(
@@ -36,7 +37,14 @@ export class OpenAIProvider implements AIProvider {
     clientOptions: { fetch?: typeof fetch; maxRetries?: number } = {},
   ) {
     // One SDK-level retry for transient 429/5xx; the overall deadline below caps total wall time.
-    this.client = new OpenAI({ apiKey: config.apiKey, timeout: config.timeoutMs, maxRetries: 1, ...clientOptions });
+    this.name = config.provider;
+    this.client = new OpenAI({
+      apiKey: config.apiKey,
+      ...(config.baseUrl ? { baseURL: config.baseUrl } : {}),
+      timeout: config.timeoutMs,
+      maxRetries: 1,
+      ...clientOptions,
+    });
   }
 
   async generateAnswer(input: { question: string; sections: AIContextSection[] }): Promise<AIResult> {
@@ -49,7 +57,8 @@ export class OpenAIProvider implements AIProvider {
           model: this.config.model,
           max_completion_tokens: this.config.maxOutputTokens,
           messages: [
-            { role: "developer", content: SYSTEM_PROMPT },
+            // "system" works on OpenAI (mapped to developer for reasoning models) and on Groq.
+            { role: "system", content: SYSTEM_PROMPT },
             { role: "user", content: buildUserMessage(input.question, input.sections) },
           ],
           response_format: {

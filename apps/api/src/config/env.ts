@@ -31,8 +31,10 @@ const envSchema = z.object({
   /** Verified sign-ins with these emails get the admin role automatically (comma-separated). */
   ADMIN_EMAILS: csv.optional(),
 
-  /** anthropic | openai. When unset, inferred from the key prefix (sk-ant- → anthropic, else openai). */
-  AI_PROVIDER: z.enum(["anthropic", "openai"]).optional(),
+  /** anthropic | openai | groq. When unset, inferred from the key prefix (sk-ant-, gsk_, else openai). */
+  AI_PROVIDER: z.enum(["anthropic", "openai", "groq"]).optional(),
+  /** Override the OpenAI-compatible endpoint (groq defaults to https://api.groq.com/openai/v1). */
+  AI_BASE_URL: z.url().optional().or(z.literal("").transform(() => undefined)),
   AI_API_KEY: z.string().min(1, "AI_API_KEY is required"),
   /** Defaults per provider: claude-opus-5-5 (anthropic) / gpt-5.4-mini (openai). */
   AI_MODEL: z.string().min(1).optional(),
@@ -48,6 +50,8 @@ const envSchema = z.object({
   VECTOR_COLLECTION: z.string().regex(/^[A-Za-z0-9_-]+$/).default("sections"),
   /** OpenAI key for embeddings. Defaults to AI_API_KEY when the AI provider is OpenAI. */
   EMBEDDING_API_KEY: z.string().optional(),
+  /** OpenAI-compatible embeddings endpoint, e.g. a local Ollama (http://ollama:11434/v1). No key needed. */
+  EMBEDDING_BASE_URL: z.url().optional().or(z.literal("").transform(() => undefined)),
   EMBEDDING_MODEL: z.string().min(1).default("text-embedding-3-small"),
   EMBEDDING_DIMENSIONS: z.coerce.number().int().min(64).max(4096).default(1536),
   /** Cosine similarity below which a semantic hit is ignored (guards against "close enough" guesses). */
@@ -70,7 +74,9 @@ const envSchema = z.object({
 
 export type Env = z.infer<typeof envSchema>;
 
-const DEFAULT_MODELS = { anthropic: "claude-opus-5-5", openai: "gpt-5.4-mini" } as const;
+const DEFAULT_MODELS = { anthropic: "claude-opus-5-5", openai: "gpt-5.4-mini", groq: "openai/gpt-oss-120b" } as const;
+const DEFAULT_BASE_URLS: Partial<Record<AIProviderName, string>> = { groq: "https://api.groq.com/openai/v1" };
+export type AIProviderName = keyof typeof DEFAULT_MODELS;
 
 export interface AppConfig {
   env: Env["NODE_ENV"];
@@ -87,7 +93,9 @@ export interface AppConfig {
   };
   adminEmails: string[];
   ai: {
-    provider: "anthropic" | "openai";
+    provider: AIProviderName;
+    /** OpenAI-compatible base URL (Groq, proxies). Undefined = the provider's default. */
+    baseUrl: string | undefined;
     apiKey: string;
     model: string;
     effort: "low" | "medium" | "high" | "xhigh" | "max" | undefined;
@@ -102,7 +110,7 @@ export interface AppConfig {
     collection: string;
     minScore: number;
     topK: number;
-    embedding: { apiKey: string; model: string; dimensions: number; timeoutMs: number };
+    embedding: { apiKey: string; baseUrl: string | undefined; model: string; dimensions: number; timeoutMs: number };
   } | null;
   limits: {
     monthlyQueryLimit: number;
@@ -129,7 +137,8 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   const e = parsed.data;
   const frontendOrigin = new URL(e.FRONTEND_URL).origin;
-  const aiProvider = e.AI_PROVIDER ?? (e.AI_API_KEY.startsWith("sk-ant-") ? "anthropic" : "openai");
+  const aiProvider: AIProviderName =
+    e.AI_PROVIDER ?? (e.AI_API_KEY.startsWith("sk-ant-") ? "anthropic" : e.AI_API_KEY.startsWith("gsk_") ? "groq" : "openai");
   return {
     env: e.NODE_ENV,
     port: e.PORT,
@@ -148,6 +157,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     adminEmails: (e.ADMIN_EMAILS ?? []).map((m) => m.toLowerCase()),
     ai: {
       provider: aiProvider,
+      baseUrl: (e.AI_BASE_URL ?? DEFAULT_BASE_URLS[aiProvider])?.replace(/\/+$/, ""),
       apiKey: e.AI_API_KEY,
       model: e.AI_MODEL ?? DEFAULT_MODELS[aiProvider],
       effort: e.AI_EFFORT === "none" ? undefined : e.AI_EFFORT,
@@ -171,8 +181,11 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
   };
 }
 
-function buildVectorConfig(e: Env, aiProvider: "anthropic" | "openai"): AppConfig["vector"] {
-  const embeddingKey = e.EMBEDDING_API_KEY || (aiProvider === "openai" ? e.AI_API_KEY : undefined);
+function buildVectorConfig(e: Env, aiProvider: AIProviderName): AppConfig["vector"] {
+  const baseUrl = e.EMBEDDING_BASE_URL?.replace(/\/+$/, "");
+  // A custom endpoint (e.g. local Ollama) doesn't need a real key; the SDK just requires a value.
+  const embeddingKey =
+    e.EMBEDDING_API_KEY || (baseUrl ? "not-needed" : aiProvider === "openai" ? e.AI_API_KEY : undefined);
   if (!e.VECTOR_DB_URL || !embeddingKey) return null;
   return {
     url: e.VECTOR_DB_URL.replace(/\/+$/, ""),
@@ -182,6 +195,7 @@ function buildVectorConfig(e: Env, aiProvider: "anthropic" | "openai"): AppConfi
     topK: e.VECTOR_TOP_K,
     embedding: {
       apiKey: embeddingKey,
+      baseUrl,
       model: e.EMBEDDING_MODEL,
       dimensions: e.EMBEDDING_DIMENSIONS,
       timeoutMs: Math.min(e.AI_TIMEOUT_MS, 15_000),

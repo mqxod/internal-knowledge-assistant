@@ -16,7 +16,13 @@ export class OpenAIEmbedder implements Embedder {
     clientOptions: { fetch?: typeof fetch; maxRetries?: number } = {},
   ) {
     this.dimensions = config.dimensions;
-    this.client = new OpenAI({ apiKey: config.apiKey, timeout: config.timeoutMs, maxRetries: 1, ...clientOptions });
+    this.client = new OpenAI({
+      apiKey: config.apiKey,
+      ...(config.baseUrl ? { baseURL: config.baseUrl } : {}),
+      timeout: config.timeoutMs,
+      maxRetries: 1,
+      ...clientOptions,
+    });
   }
 
   async embed(texts: string[]): Promise<number[][]> {
@@ -26,7 +32,8 @@ export class OpenAIEmbedder implements Embedder {
       const res = await this.client.embeddings.create({
         model: this.config.model,
         input: batch,
-        dimensions: this.config.dimensions,
+        // Only OpenAI's own API supports shortening vectors; other servers return the model's native size.
+        ...(this.config.baseUrl ? {} : { dimensions: this.config.dimensions }),
         encoding_format: "float",
       });
       const vectors = [...res.data].sort((a, b) => a.index - b.index).map((d) => d.embedding);
