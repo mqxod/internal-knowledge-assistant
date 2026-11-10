@@ -362,6 +362,23 @@ The tests exercise real behaviour, not just status codes:
 - **Quotas:** limit enforced with `429` + usage + reset date; **12 concurrent requests vs. limit 3 → exactly 3 succeed**; failures refunded; no-answers counted; UTC month rollover; idempotent replay without double counting; per-user key scoping; key reuse for another question rejected; in-flight duplicate → `409`; triple concurrent release refunds once; abandoned reservations swept; org AI budget stops provider calls.
 - **Anthropic provider:** the real SDK request/parse path with a stubbed `fetch` — request shape (model, schema, effort), schema-invalid/empty/truncated output, refusal, 429/500/529/401 mapping without leaking provider text, network errors, and the hard timeout.
 
+## Vercel deployment (Services)
+
+`vercel.json` deploys both apps as **one Vercel project with two services** on one domain:
+
+| Service | Root | Public path | Notes |
+|---|---|---|---|
+| `web` | `apps/web` | `/(.*)` (catch-all, last) | Next.js; Clerk middleware |
+| `api` | `apps/api` | `/api/(.*)` | Express as one Vercel Function; entry `dist/vercel.js` (built by tsup, bundles `@ika/shared`) |
+
+- The API receives the original path (`/api/v1/...`), which is where its routes are mounted. The browser calls `/api/v1/*` on the same origin, so no CORS and **no service binding** is needed (the web app never calls the API server-side). The Next.js dev proxy to `API_INTERNAL_URL` is disabled when `VERCEL` is set.
+- `src/vercel.ts` connects to MongoDB lazily (reused while the instance is warm; 503 + retry if unavailable) and runs the housekeeping that `server.ts` does on timers (stale reservations, interrupted ingestions, vector backfill) after responses via `waitUntil`, throttled per instance.
+- **Environment variables** (Project → Settings → Environment Variables, shared by both services): everything from `.env.example`, with `NODE_ENV=production`, `TRUST_PROXY=1`, `FRONTEND_URL=https://<your-domain>`, `CLERK_AUTHORIZED_PARTIES=https://<your-domain>`, and the Clerk/AI/Mongo keys. `NEXT_PUBLIC_*` must be present at build time.
+- **MongoDB Atlas** must accept connections from Vercel (dynamic IPs: allow `0.0.0.0/0` with a strong password, or use Vercel Secure Compute).
+- **Qdrant** isn't part of the deployment: set `VECTOR_DB_URL` (+ `VECTOR_DB_API_KEY`) to a hosted Qdrant (e.g. Qdrant Cloud), or leave it unset for keyword-only search.
+- Uploads are limited by `MAX_UPLOAD_SIZE_MB` (2 MB), well under Vercel's 4.5 MB request body limit. Rate limiting is per function instance.
+- Local: `vercel dev` runs both services together; Docker Compose remains the one-command local stack.
+
 ## AWS deployment
 
 Summary (full step-by-step in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)):

@@ -6,6 +6,9 @@ const rootEnv = new URL("../../.env", import.meta.url).pathname;
 if (process.env.NODE_ENV !== "production" && existsSync(rootEnv)) process.loadEnvFile(rootEnv);
 
 const apiOrigin = process.env.API_INTERNAL_URL ?? process.env.API_URL ?? "http://localhost:4000";
+// On Vercel, the top-level rewrite in vercel.json sends /api/* straight to the `api` service, so
+// this proxy is never reached there; skip it rather than bake a meaningless origin into the build.
+const proxyApi = !process.env.VERCEL;
 
 const nextConfig: NextConfig = {
   output: "standalone",
@@ -19,10 +22,10 @@ const nextConfig: NextConfig = {
       "*.css": { loaders: ["@tailwindcss/turbopack"], as: "*.css" },
     },
   },
-  // In production Nginx routes /api/* to the API directly; this rewrite serves local dev
-  // and keeps the browser same-origin in both cases (no CORS, no third-party cookies).
+  // In production Nginx (Docker) or vercel.json (Vercel) routes /api/* to the API directly; this
+  // rewrite serves `next dev` / Docker and keeps the browser same-origin (no CORS, no third-party cookies).
   async rewrites() {
-    return [{ source: "/api/v1/:path*", destination: `${apiOrigin}/api/v1/:path*` }];
+    return proxyApi ? [{ source: "/api/v1/:path*", destination: `${apiOrigin}/api/v1/:path*` }] : [];
   },
   async headers() {
     return [
