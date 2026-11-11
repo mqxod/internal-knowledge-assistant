@@ -18,7 +18,7 @@ stop_caffeinate() {
 }
 
 if [[ "${1:-}" == "stop" ]]; then
-  docker compose "${PROFILES[@]}" down
+  docker compose ${PROFILES[@]+"${PROFILES[@]}"} down
   stop_caffeinate
   echo "Stopped. The Mac can sleep again."
   exit 0
@@ -32,28 +32,47 @@ fi
 BUILD=()
 [[ "${1:-}" == "--build" ]] && BUILD=(--build)
 
-echo "▶ Starting the stack…"
-docker compose "${PROFILES[@]}" up -d ${BUILD[@]+"${BUILD[@]}"}
+# Fixed URL mode: PUBLIC_URL in .env (or the shell) = a named Cloudflare tunnel you run yourself
+# (e.g. `cloudflared service install <token>`, public hostname -> http://localhost:8080).
+# Then no quick tunnel is started and the URL never changes.
+PUBLIC_URL="${PUBLIC_URL:-$(grep -E '^PUBLIC_URL=' .env | tail -1 | cut -d= -f2- || true)}"
+PUBLIC_URL="${PUBLIC_URL%/}"
+if [[ -n "$PUBLIC_URL" ]]; then
+  PROFILES=()
+  docker compose --profile public rm -sf tunnel >/dev/null 2>&1 || true
+fi
 
-echo "▶ Waiting for the public tunnel URL…"
-URL=""
+echo "▶ Starting the stack…"
+docker compose ${PROFILES[@]+"${PROFILES[@]}"} up -d ${BUILD[@]+"${BUILD[@]}"}
+
+URL="$PUBLIC_URL"
+[[ -z "$URL" ]] && echo "▶ Waiting for the public tunnel URL…"
 for _ in $(seq 1 60); do
-  URL=$(docker compose "${PROFILES[@]}" logs tunnel 2>/dev/null | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1 || true)
+  [[ -n "$URL" ]] && break
+  # The assigned URL is printed in a banner; "api.trycloudflare.com" only appears in error lines.
+  URL=$(docker compose ${PROFILES[@]+"${PROFILES[@]}"} logs tunnel 2>/dev/null | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | grep -v '^https://api\.' | tail -1 || true)
   [[ -n "$URL" ]] && break
   sleep 2
 done
-[[ -n "$URL" ]] || { echo "Tunnel didn't report a URL. Check: docker compose --profile public logs tunnel" >&2; exit 1; }
+if [[ -z "$URL" ]]; then
+  echo "✘ Cloudflare didn't assign a tunnel URL within 2 minutes. Last tunnel messages:" >&2
+  docker compose ${PROFILES[@]+"${PROFILES[@]}"} logs --tail 3 tunnel >&2 || true
+  echo "  The app is still running locally at http://localhost:8080. Cloudflare's free quick" >&2
+  echo "  tunnels are sometimes slow or rate-limited after many restarts: wait a few minutes and" >&2
+  echo "  run scripts/demo.sh again." >&2
+  exit 1
+fi
 
 # Clerk session tokens are only accepted from allowed origins: add the tunnel URL, then
 # recreate the API with it. Nginx is restarted so it picks up the new API container address.
 export CLERK_AUTHORIZED_PARTIES="$URL,http://localhost:8080,http://localhost:3000"
 export FRONTEND_URL="$URL"
-docker compose "${PROFILES[@]}" up -d --no-deps --force-recreate api >/dev/null
-docker compose "${PROFILES[@]}" restart nginx >/dev/null
+docker compose ${PROFILES[@]+"${PROFILES[@]}"} up -d --no-deps --force-recreate api >/dev/null
+docker compose ${PROFILES[@]+"${PROFILES[@]}"} restart nginx >/dev/null
 
 echo "▶ Waiting for the API…"
 for _ in $(seq 1 60); do
-  [[ "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose "${PROFILES[@]}" ps -q api)" 2>/dev/null)" == "healthy" ]] && break
+  [[ "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ${PROFILES[@]+"${PROFILES[@]}"} ps -q api)" 2>/dev/null)" == "healthy" ]] && break
   sleep 2
 done
 

@@ -8,7 +8,7 @@ import { useSignInAs } from "../hooks/use-sign-in-as";
 
 const HINTS: Record<UserRole, string> = {
   member: "Ask questions and get answers from company documents.",
-  admin: "Upload and manage documents. Only approved administrator emails get admin access.",
+  admin: "Only approved administrator emails get admin access.",
 };
 
 /** Member / Admin choice shown above Clerk's sign-in and sign-up forms. */
